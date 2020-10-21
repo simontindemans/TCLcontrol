@@ -1,6 +1,8 @@
 # TCLcontrol
 Decentralised distribution-referred TCL controller
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4114089.svg)](https://doi.org/10.5281/zenodo.4114089)
+
 This code accompanies the paper *Low-complexity algorithm for decentralized aggregate load control of thermostatic loads*,
 to appear in IEEE Transactions on Industry Applications.
 
