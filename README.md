@@ -6,7 +6,7 @@ Decentralised distribution-referred TCL controller
 
 This code accompanies the paper *Low-complexity control algorithm for decentralised demand response using thermostatic loads* by
 Simon Tindemans and Goran Strbac, 2019 IEEE Conference on Environment and Electrical Engineering (EEEIC 2019), Genoa (Italy).
-doi: 10.1109/EEEIC.2019.8783359.
+doi: [10.1109/EEEIC.2019.8783359](https://dx.doi.org/10.1109/EEEIC.2019.8783359).
 
 A freely accessible preprint is available at: https://arxiv.org/abs/1904.12401. If you use (parts of) this code, please cite the published paper.
 
