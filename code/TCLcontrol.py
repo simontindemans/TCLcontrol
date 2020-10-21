@@ -1,16 +1,20 @@
 """
 Low-complexity TCL controller
 Python 3 with numba enhancements
-Version 4 March 2019
-author: Simon Tindemans, s.h.tindemans@tudelft.nl
+Version 11 September 2020
+Simon Tindemans, s.h.tindemans@tudelft.nl
 
 This code implements the control algorithm described in the paper 
-"Low-complexity control algorithm for decentralised demand response using thermostatic loads",
-Simon Tindemans and Goran Strbac,
-2019 IEEE Conference on Environment and Electrical Engineering (EEEIC 2019), Genoa (Italy).
-doi: 10.1109/EEEIC.2019.8783359
-arXiv:1904.12401
+"Low-complexity algorithm for decentralized aggregate load control of thermostatic loads",
+to appear in IEEE Transactions on Industry Applications. 
+Please reference this paper if you use this code.
 
+The algorithm is a functionally equivalent but cleaner version of the algorithm in:
+Simon Tindemans and Goran Strbac,
+"Low-complexity control algorithm for decentralised demand response using thermostatic loads",
+2019 IEEE Conference on Environment and Electrical Engineering (EEEIC 2019), Genoa (Italy).
+Paper DOI: 10.1109/EEEIC.2019.8783359
+Code DOI: 10.24433/CO.6765929.v1
 """
 # SPDX-License-Identifier: MIT
 
@@ -18,7 +22,7 @@ import numpy as np
 import numba as nb
 
 
-@nb.jitclass([
+@nb.experimental.jitclass([
     ('Toff', nb.float64),
     ('Ton', nb.float64),
     ('Tmax', nb.float64),
@@ -39,10 +43,14 @@ class Model:
         self.alpha = alpha
         self.width = width
 
-        self.pi0 = np.log((Tmax-Ton)/(Tmin-Ton))/np.log(((Tmax-Ton)*(Tmin-Toff))/((Tmin-Ton)*(Tmax-Toff)))
-        self.Tavg0 = Toff - (Toff-Ton)*self.pi0
+        self.update_ss_parameters()
 
-@nb.jitclass([
+    def update_ss_parameters(self):
+        self.pi0 = np.log((self.Tmax-self.Ton)/(self.Tmin-self.Ton))/np.log(((self.Tmax-self.Ton)*(self.Tmin-self.Toff))/((self.Tmin-self.Ton)*(self.Tmax-self.Toff)))
+        self.Tavg0 = self.Toff - (self.Toff-self.Ton)*self.pi0
+        return
+
+@nb.experimental.jitclass([
     ('state', nb.int64),
     ('snapshot_time', nb.float64),
     ('reference_power', nb.float64),
@@ -108,6 +116,11 @@ def update_state(requested_power, current_temperature, current_time, model, prev
     decay_factor = np.exp(-model.alpha * time_delta)
     z = previous_state.z * decay_factor + (previous_state.reference_power - 1.0)*(1.0 - decay_factor)
 
+    # compute reference temperature values R_i^- and R_-^+ in left/right limits ('pre'/'post' with respect to t_i)
+    # note that limits of zeta(t), beta(t) and s(t) are not explicitly computed, because these follow from the
+    # input (R_i^(-,+)) and (in the case of beta(t) from Pi
+    ref_temp_pre = model.Tmax if (previous_state.z <= 0.0) else model.Tmin
+    ref_temp_post = model.Tmax if (z <= 0.0) else model.Tmin
 
     # DEFINE CONTROL AND SCALING RELATIONS
 
@@ -129,69 +142,57 @@ def update_state(requested_power, current_temperature, current_time, model, prev
 
     # define switching rates
     def P(R):
-        return current_temperature - model.Toff + (model.Toff - R)*(1-scale(R))
+        return (R - model.Toff) * scale(R) + (current_temperature - R)
     def Q(R):
-        return current_temperature - model.Ton + (model.Ton - R)*(1-scale(R))
+        return (R - model.Ton) * scale(R) + (current_temperature - R)
     def X(Pi, R):
-        return current_temperature - model.Toff + (current_temperature - R)*beta(Pi, R)
+        return (current_temperature - model.Toff) + (current_temperature - R)*beta(Pi, R)
     def Y(Pi, R):
-        return current_temperature - model.Ton + (current_temperature - R)*beta(Pi, R)
+        return (current_temperature - model.Ton) + (current_temperature - R)*beta(Pi, R)
     def Xi(Pi, R):
         return model.alpha*model.alpha*(X(Pi,R)*Y(Pi,R)/(P(R)*Q(R))*(P(R)+Q(R)) - (1+beta(Pi,R))*(X(Pi,R) + Y(Pi,R)))
 
     # APPLY ENERGY AND POWER LIMITS
 
     reference_power = requested_power
-    if z <= 0.0:
-        if z <= model.width * zeta(model.Tmax):     # lower energy limit violated
-            reference_power = np.maximum(reference_power, 1 + model.width * zeta(model.Tmax))
-        reference_power = np.maximum(reference_power,
-                                     ((model.Tavg0 - model.Tmin)/(model.Tmax - model.Tmin)) * ((model.Toff - model.Tmax)/(model.Toff - model.Tavg0)))
-        reference_power = np.minimum(reference_power, ((model.Toff - model.Tmax)/(model.Toff - model.Tavg0))
-                                     + (((model.Tmax - model.Tavg0) * (model.Tmax - model.Ton))/((model.Tmax - model.Tmin) * (model.Toff - model.Tavg0))))
-    else:
-        if z >= model.width * zeta(model.Tmin):     # upper energy limit violated
-            reference_power = np.minimum(reference_power, 1 + model.width * zeta(model.Tmin))
-        reference_power = np.maximum(reference_power,
-                                     ((model.Tmax - model.Tavg0) / (model.Tmax - model.Tmin)) * ((model.Toff - model.Tmax) / (model.Toff - model.Tavg0)))
-        reference_power = np.minimum(reference_power, ((model.Toff - model.Tmin) / (model.Toff - model.Tavg0))
-                                     + (((model.Tavg0 - model.Tmin) * (model.Tmin - model.Ton)) / ((model.Tmax - model.Tmin) * (model.Toff - model.Tavg0))))
+
+    # apply energy limits
+    if z <= model.width * zeta(model.Tmax):     # lower energy limit violated
+        reference_power = np.maximum(reference_power, 1 + model.width * zeta(model.Tmax))
+    elif z >= model.width * zeta(model.Tmin):   # upper energy limit violated
+        reference_power = np.minimum(reference_power, 1 + model.width * zeta(model.Tmin))
+
+    # apply power limits (first lower, then upper)
+    reference_power = np.maximum(reference_power,
+                                 1.0 + zeta(ref_temp_post)*(model.Tmin + model.Tmax - model.Toff - ref_temp_post)/
+                                 (model.Tmin + model.Tmax - 2*ref_temp_post))
+    reference_power = np.minimum(reference_power,
+                                 1.0 + zeta(ref_temp_post)*(model.Tmin + model.Tmax - model.Ton - ref_temp_post)/
+                                 (model.Tmin + model.Tmax - 2*ref_temp_post))
 
     # COMPUTATION OF PROBABILITIES
 
-    # compute control values in left/right limits ('pre'/'post' with respect to t_i)
-    # note that limits of zeta(t) and s(t) are not explicitly computed, because these follow from the input (R_i^(-,+))
-
-    # reference temperatures R_i^- and R_-^+
-    ref_temp_pre = model.Tmax if (previous_state.z <= 0.0) else model.Tmin
-    ref_temp_post = model.Tmax if (z <= 0.0) else model.Tmin
-    # control parameters
-    beta_pre = beta(previous_state.reference_power, ref_temp_pre)
-    beta_post = beta(reference_power, ref_temp_post)
+    # precompute X_i^- (X_pre), X_i^- (X_post), Y_i^- (Y_pre), Y_i^- (Y_post)
+    X_pre = X(previous_state.reference_power, ref_temp_pre)
+    X_post = X(reference_power, ref_temp_post)
+    Y_pre = Y(previous_state.reference_power, ref_temp_pre)
+    Y_post = Y(reference_power, ref_temp_post)
 
     # compute on->off rates, in left and right limits
-    rate_on_off_pre = max(0, -Xi(previous_state.reference_power, ref_temp_pre)
-                          / (model.alpha*(current_temperature - model.Toff + beta_pre*(current_temperature - ref_temp_pre))))
-    rate_on_off_post = max(0, -Xi(reference_power, ref_temp_post)
-                           / (model.alpha*(current_temperature - model.Toff + beta_post*(current_temperature - ref_temp_post))))
+    rate_on_off_pre = max(0, -Xi(previous_state.reference_power, ref_temp_pre) / (model.alpha*X_pre))
+    rate_on_off_post = max(0, -Xi(reference_power, ref_temp_post) / (model.alpha*X_post))
 
     # compute off->on rates, in left and right limits
-    rate_off_on_pre = max(0, -Xi(previous_state.reference_power, ref_temp_pre)
-                          / (model.alpha*(current_temperature - model.Ton + beta_pre*(current_temperature - ref_temp_pre))))
-    rate_off_on_post = max(0, -Xi(reference_power, ref_temp_post)
-                           / (model.alpha*(current_temperature - model.Ton + beta_post*(current_temperature - ref_temp_post))))
+    rate_off_on_pre = max(0, -Xi(previous_state.reference_power, ref_temp_pre) / (model.alpha*Y_pre))
+    rate_off_on_post = max(0, -Xi(reference_power, ref_temp_post) / (model.alpha*Y_post))
 
     # compute stochastic switching probabilities
     prob_off_on_stoch = 0.5*time_delta*(rate_off_on_pre + previous_state.rate_off_on)
     prob_on_off_stoch = 0.5*time_delta*(rate_on_off_pre + previous_state.rate_on_off)
 
     # compute instantaneous switching probabilities
-    prob_off_on_inst = max(0, 1.0 -
-                           (current_temperature - model.Ton + (current_temperature - ref_temp_post) * beta_post) /
-                           (current_temperature - model.Ton + (current_temperature - ref_temp_pre) * beta_pre))
-    prob_on_off_inst = max(0, 1.0 -
-                           (current_temperature - model.Toff + (current_temperature - ref_temp_post) * beta_post) /
-                           (current_temperature - model.Toff + (current_temperature - ref_temp_pre) * beta_pre))
+    prob_off_on_inst = max(0, 1.0 - Y_post/Y_pre)
+    prob_on_off_inst = max(0, 1.0 - X_post/X_pre)
 
     # IMPLEMENT SWITCHING ACTIONS
 
