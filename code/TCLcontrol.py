@@ -4,7 +4,8 @@ Python 3 with numba enhancements
 Version 11 September 2020
 Simon Tindemans, s.h.tindemans@tudelft.nl
 
-This code implements the control algorithm described in the paper 
+This code implements the control algorithm described in the paper:
+Simon Tindemans and Goran Strbac, 
 "Low-complexity algorithm for decentralized aggregate load control of thermostatic loads",
 to appear in IEEE Transactions on Industry Applications. 
 Please reference this paper if you use this code.
